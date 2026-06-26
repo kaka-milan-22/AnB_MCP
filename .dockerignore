@@ -1,0 +1,7 @@
+.git
+.github
+anb-mcp
+*.test
+test/
+PLAN.md
+.DS_Store
