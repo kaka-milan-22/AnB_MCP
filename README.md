@@ -38,11 +38,13 @@ This is a thin front-end; it depends on AnB. For v0.1 you need:
 
 1. **A working `alice` + `bob`** (AnB) on the host.
 2. **A dedicated MCP identity** enrolled with Bob, scoped to only the key prefixes the
-   agent should use. Point the server at it via `ANB_MCP_ALICE_STATE`
+   agent should use. Point the server at it via `ANB_MCP_ALICE_DIR`
    (default `~/.anb/alice-mcp`). Do **not** reuse your operator identity.
-3. **Exec allowlist with scope tags** — `alice`'s exec rules carry a `scope` column;
-   only rules tagged `scope=mcp` apply to this surface (default-deny). *(Requires the
-   `--surface` support in `alice`; see the alice TODOs.)*
+3. **Exec allowlist with scope tags** — `alice`'s exec rules carry a 4th `scope`
+   column; only rules tagged `mcp` apply to this surface (default-deny). Tag a rule
+   for the agent by appending `mcp` (e.g. `^/opt/.../curl ...$\tOPENAI_KEY\t# call\tmcp`).
+   *(Requires AnB with `alice exec --surface`, `alice redact`, and `alice status --json`
+   — all shipped.)*
 
 ## Build
 
@@ -54,7 +56,7 @@ go build -o anb-mcp .
 ## Register with Claude Code
 
 ```bash
-claude mcp add -s user -e ANB_MCP_ALICE_STATE=$HOME/.anb/alice-mcp \
+claude mcp add -s user -e ANB_MCP_ALICE_DIR=$HOME/.anb/alice-mcp \
   anb -- /path/to/anb-mcp
 ```
 
@@ -65,7 +67,7 @@ Or in `~/.claude.json` under `mcpServers`:
   "mcpServers": {
     "anb": {
       "command": "/path/to/anb-mcp",
-      "env": { "ANB_MCP_ALICE_STATE": "/Users/you/.anb/alice-mcp" }
+      "env": { "ANB_MCP_ALICE_DIR": "/Users/you/.anb/alice-mcp" }
     }
   }
 }
@@ -75,10 +77,12 @@ Tools surface as `mcp__anb__anb_list`, `mcp__anb__anb_exec`, `mcp__anb__anb_stat
 
 ## Status
 
-**v0.1 — work in progress.** The MCP server, tool schemas, and the alice subprocess
-wrapper are scaffolded. Remaining for v0.1: confirm `alice`'s `--json` / `--surface`
-flags and output shapes, fill the alice wrapper TODOs, and complete the invariant
-tests in `test/`.
+**v0.1 — wired to the real alice CLI.** The MCP server, tool schemas, and the alice
+subprocess wrapper are implemented against alice's actual interface (`--dir`,
+`exec --surface mcp` + subprocess capture, `redact` stdin filter, `list/status
+--json`). Builds clean. Remaining for v0.1: enroll a dedicated scoped MCP identity,
+add `mcp`-scoped exec rules, end-to-end test against a running Bob, and complete the
+invariant tests in `test/`.
 
 Roadmap: see [PLAN.md](./PLAN.md). (v0.2 adds `anb_render_to_file` + `anb_redact`;
 v0.3 refactors to a direct, per-agent scoped Bob client.)

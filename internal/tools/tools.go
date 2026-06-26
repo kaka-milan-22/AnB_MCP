@@ -3,7 +3,7 @@
 // jsonschema tags; the go-sdk infers the tool schema from them.
 //
 // Invariant: NO handler here returns a plaintext secret. Tools either return
-// metadata (list/status) or route secrets into a child process / file (exec),
+// metadata (list/status) or route secrets into a child process (exec),
 // returning only redacted output.
 package tools
 
@@ -38,22 +38,20 @@ func (t *Tools) List(ctx context.Context, _ *mcp.CallToolRequest, _ ListInput) (
 // ---- anb_exec -------------------------------------------------------------
 
 type ExecInput struct {
-	Rule    string   `json:"rule,omitempty" jsonschema:"id of the operator-allowlisted exec rule to run"`
-	Command string   `json:"command" jsonschema:"the command to run; must match an allowlisted rule (scope=mcp)"`
+	Command string   `json:"command" jsonschema:"absolute path of the command to run; must match an allowlisted rule scoped to mcp"`
 	Args    []string `json:"args,omitempty" jsonschema:"command arguments"`
-	EnvKeys []string `json:"env_keys,omitempty" jsonschema:"secret key names to inject into the child process env; values are never returned"`
+	Env     []string `json:"env,omitempty" jsonschema:"KEY=VALUE entries for the child env; VALUE may contain <agent-vault:key> placeholders, which are resolved without ever returning the secret"`
 }
 
 type ExecOutput struct {
 	ExitCode       int    `json:"exit_code"`
 	StdoutRedacted string `json:"stdout_redacted" jsonschema:"command stdout with secrets redacted"`
-	StderrRedacted string `json:"stderr_redacted" jsonschema:"command stderr with secrets redacted"`
+	StderrRedacted string `json:"stderr_redacted" jsonschema:"command stderr with secrets redacted (includes an allowlist-denial message when the command was not permitted)"`
 }
 
 func (t *Tools) Exec(ctx context.Context, _ *mcp.CallToolRequest, in ExecInput) (*mcp.CallToolResult, ExecOutput, error) {
-	r, err := t.Alice.Exec(ctx, in.Rule, in.Command, in.Args, in.EnvKeys)
+	r, err := t.Alice.Exec(ctx, in.Command, in.Args, in.Env)
 	if err != nil {
-		// Allowlist denial / failure surfaces as an error — the agent gets no secret.
 		return nil, ExecOutput{}, err
 	}
 	return nil, ExecOutput{
@@ -67,11 +65,17 @@ func (t *Tools) Exec(ctx context.Context, _ *mcp.CallToolRequest, in ExecInput) 
 
 type StatusInput struct{}
 
+// StatusOutput mirrors `alice status --json`.
 type StatusOutput struct {
-	BobReachable       bool     `json:"bob_reachable"`
-	Identity           string   `json:"identity"`
-	AuthorizedPrefixes []string `json:"authorized_prefixes"`
-	ExecRulesN         int      `json:"exec_rules_n"`
+	Enrolled     bool   `json:"enrolled"`
+	Identity     string `json:"identity,omitempty"`
+	BobAddr      string `json:"bob_addr,omitempty"`
+	ServerName   string `json:"server_name,omitempty"`
+	ClientCert   bool   `json:"client_cert"`
+	BobReachable bool   `json:"bob_reachable"`
+	BobUnlocked  bool   `json:"bob_unlocked"`
+	IdleTTLSec   int    `json:"idle_ttl_seconds,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 func (t *Tools) Status(ctx context.Context, _ *mcp.CallToolRequest, _ StatusInput) (*mcp.CallToolResult, StatusOutput, error) {
@@ -79,10 +83,5 @@ func (t *Tools) Status(ctx context.Context, _ *mcp.CallToolRequest, _ StatusInpu
 	if err != nil {
 		return nil, StatusOutput{}, err
 	}
-	return nil, StatusOutput{
-		BobReachable:       s.BobReachable,
-		Identity:           s.Identity,
-		AuthorizedPrefixes: s.AuthorizedPrefixes,
-		ExecRulesN:         s.ExecRulesN,
-	}, nil
+	return nil, StatusOutput(s), nil
 }

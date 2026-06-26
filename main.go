@@ -23,18 +23,18 @@ import (
 )
 
 func main() {
-	// Dedicated, narrowly-scoped MCP identity state — NOT the operator's
-	// ~/.anb/alice. The operator must enroll this identity with Bob and grant
-	// it only the key prefixes the agent is allowed to use (decision #4).
-	stateDir := os.Getenv("ANB_MCP_ALICE_STATE")
-	if stateDir == "" {
-		stateDir = os.ExpandEnv("$HOME/.anb/alice-mcp")
+	// Dedicated, narrowly-scoped MCP identity state (alice --dir) — NOT the
+	// operator's ~/.anb/alice. The operator must enroll this identity with Bob
+	// and grant it only the key prefixes the agent may use (decision #4).
+	dir := os.Getenv("ANB_MCP_ALICE_DIR")
+	if dir == "" {
+		dir = os.ExpandEnv("$HOME/.anb/alice-mcp")
 	}
 
 	ac := alice.New(alice.Config{
-		Bin:      envOr("ANB_ALICE_BIN", "alice"),
-		StateDir: stateDir,
-		Surface:  "mcp", // alice applies only exec rules tagged scope=mcp (decision #2)
+		Bin:     envOr("ANB_ALICE_BIN", "alice"),
+		Dir:     dir,
+		Surface: "mcp", // alice applies only exec rules tagged scope=mcp (decision #2)
 	})
 
 	t := &tools.Tools{Alice: ac}

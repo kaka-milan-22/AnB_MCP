@@ -1,147 +1,172 @@
 // Package alice is a thin wrapper around the `alice` CLI (the AnB client).
 //
-// All security-critical logic lives in `alice`, not here:
-//   - the redaction engine,
-//   - the exec allowlist (default-deny, RE2 rules, scope tags),
-//   - the structural no-reveal guarantee (reveal/shell require a TTY, which
-//     this process does not have, so alice refuses them).
+// All security-critical logic lives in `alice`, not here: the redaction engine,
+// the exec allowlist (default-deny, RE2 rules, scope tags), and the structural
+// no-reveal guarantee (reveal/shell paths require a TTY this process does not
+// have, so alice refuses them). This package never reimplements any of it — it
+// only shells out, keeping a single source of truth for the security logic.
 //
-// This package never reimplements any of that — it only shells out. Keeping a
-// single source of truth for the security logic is deliberate (decisions #2/#3):
-// a second implementation could drift and become a hole.
+// alice CLI facts this wrapper relies on:
+//   - --dir is a PER-SUBCOMMAND flag (alice <sub> --dir D ...), not global.
+//   - exec replaces its process via syscall.Exec, so the child's stdout/stderr
+//     are captured by THIS process's pipes; there is no --json exec mode.
+//   - --surface (cli|mcp) selects which scoped exec rules apply; we pass mcp.
+//   - `alice redact` is a stdin->stdout redaction filter.
+//   - `alice list --json` -> {"keys":[...]}; `alice status --json` -> object.
 package alice
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // Config configures how we invoke the alice binary.
 type Config struct {
-	Bin      string // path/name of the alice binary (default "alice")
-	StateDir string // dedicated, narrowly-scoped MCP identity state (NOT the operator's ~/.anb/alice)
-	Surface  string // "mcp": alice applies only exec rules tagged scope=mcp
+	Bin     string // path/name of the alice binary (default "alice")
+	Dir     string // alice --dir: the dedicated, narrowly-scoped MCP identity state
+	Surface string // "mcp": passed to `alice exec --surface` (exec only)
 }
 
-// Client invokes alice with a fixed identity + surface.
+// Client invokes alice with a fixed identity (--dir) and exec surface.
 type Client struct{ cfg Config }
 
 func New(cfg Config) *Client { return &Client{cfg: cfg} }
 
-// KeyInfo is metadata about a secret key — never its value.
+// KeyInfo mirrors localvault.Listing (alice list --json) — metadata, never a value.
 type KeyInfo struct {
-	Key      string `json:"key" jsonschema:"the secret key name"`
-	Prefix   string `json:"prefix,omitempty" jsonschema:"the authz prefix this key falls under"`
-	HasValue bool   `json:"has_value" jsonschema:"whether a value is stored for this key"`
-	Meta     string `json:"meta,omitempty" jsonschema:"optional metadata label"`
+	Key         string `json:"key" jsonschema:"the secret key name"`
+	Desc        string `json:"desc,omitempty" jsonschema:"optional description"`
+	KeyEpoch    int    `json:"keyEpoch,omitempty"`
+	LenBytes    int    `json:"lenBytes,omitempty"`
+	EntropyBits int    `json:"entropyBits,omitempty"`
 }
 
-// ExecResult is the outcome of an allowlisted command. It carries redacted
-// output only — never the secret that was injected.
+// ExecResult carries redacted output only — never the injected secret.
 type ExecResult struct {
 	ExitCode       int    `json:"exit_code"`
 	StdoutRedacted string `json:"stdout_redacted"`
 	StderrRedacted string `json:"stderr_redacted"`
 }
 
-// StatusInfo is the identity/health self-check. No secret values.
-type StatusInfo struct {
-	BobReachable       bool     `json:"bob_reachable"`
-	Identity           string   `json:"identity"`
-	AuthorizedPrefixes []string `json:"authorized_prefixes"`
-	ExecRulesN         int      `json:"exec_rules_n"`
+// Status mirrors `alice status --json`. No secret values.
+type Status struct {
+	Enrolled     bool   `json:"enrolled"`
+	Identity     string `json:"identity,omitempty"`
+	BobAddr      string `json:"bob_addr,omitempty"`
+	ServerName   string `json:"server_name,omitempty"`
+	ClientCert   bool   `json:"client_cert"`
+	BobReachable bool   `json:"bob_reachable"`
+	BobUnlocked  bool   `json:"bob_unlocked"`
+	IdleTTLSec   int    `json:"idle_ttl_seconds,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
-// run executes `alice [--surface <s>] --state <dir> <args...>` and returns
-// stdout. This process has no TTY, so alice will refuse any reveal/shell path
-// automatically — we rely on that for the no-reveal guarantee.
-func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
-	var pre []string
-	if c.cfg.Surface != "" {
-		// PREREQUISITE (alice): add a --surface flag so only exec rules tagged
-		// scope=<surface> apply on this path (decision #2). Until alice ships
-		// it, scope is enforced by what rules this MCP identity can see.
-		pre = append(pre, "--surface", c.cfg.Surface)
-	}
-	pre = append(pre, "--state", c.cfg.StateDir)
-	cmd := exec.CommandContext(ctx, c.cfg.Bin, append(pre, args...)...)
+// subArgs prepends the subcommand and the per-subcommand --dir flag.
+func (c *Client) subArgs(sub string, args ...string) []string {
+	return append([]string{sub, "--dir", c.cfg.Dir}, args...)
+}
+
+// output runs alice and returns stdout, wrapping failures with stderr context.
+func (c *Client) output(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, c.cfg.Bin, args...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("alice %v: %w: %s", args, err, errb.String())
+		return nil, fmt.Errorf("alice %v: %w (stderr: %s)", args, err, strings.TrimSpace(errb.String()))
 	}
 	return out.Bytes(), nil
 }
 
-// List returns the key names/metadata this identity may reference (no values).
+// List returns key names/metadata this identity may reference (never values).
 func (c *Client) List(ctx context.Context) ([]KeyInfo, error) {
-	// TODO(alice flags): confirm `alice list --json` output shape.
-	out, err := c.run(ctx, "list", "--json")
+	out, err := c.output(ctx, c.subArgs("list", "--json")...)
 	if err != nil {
 		return nil, err
 	}
-	var keys []KeyInfo
-	if err := json.Unmarshal(out, &keys); err != nil {
+	var wrap struct {
+		Keys []KeyInfo `json:"keys"`
+	}
+	if err := json.Unmarshal(out, &wrap); err != nil {
 		return nil, fmt.Errorf("parse list output: %w", err)
 	}
-	return keys, nil
+	return wrap.Keys, nil
 }
 
-// Exec runs an operator-allowlisted command with the named secrets resolved
-// into the child process's env. alice enforces the allowlist (default-deny) and
-// the scope tag, and redacts the output. The secret value is never returned to
-// this process in plaintext.
-func (c *Client) Exec(ctx context.Context, rule, command string, args, envKeys []string) (ExecResult, error) {
-	call := []string{"exec"}
-	if rule != "" {
-		call = append(call, "--rule", rule)
-	}
-	for _, k := range envKeys {
-		// alice resolves <agent-vault:k> into the child env.
-		call = append(call, "--env", k)
-	}
-	// TODO(alice flags): confirm a `--json` exec mode that returns
-	// {exit_code, stdout_redacted, stderr_redacted}. The redaction is alice's.
-	call = append(call, "--json", "--", command)
-	call = append(call, args...)
-
-	out, err := c.run(ctx, call...)
+// Status returns the identity/health self-check.
+func (c *Client) Status(ctx context.Context) (Status, error) {
+	out, err := c.output(ctx, c.subArgs("status", "--json")...)
 	if err != nil {
-		// An allowlist denial surfaces here as an error — the agent gets no secret.
-		return ExecResult{}, err
+		return Status{}, err
 	}
-	var r ExecResult
-	if err := json.Unmarshal(out, &r); err != nil {
-		return ExecResult{}, fmt.Errorf("parse exec output: %w", err)
+	var s Status
+	if err := json.Unmarshal(out, &s); err != nil {
+		return Status{}, fmt.Errorf("parse status output: %w", err)
 	}
-	return r, nil
+	return s, nil
 }
 
 // Redact scrubs known secret values and high-entropy tokens from text using
-// alice's redaction engine (decision #3 — single source of truth).
+// alice's redaction engine (single source of truth).
 func (c *Client) Redact(ctx context.Context, text string) (string, error) {
-	cmd := exec.CommandContext(ctx, c.cfg.Bin, "--state", c.cfg.StateDir, "redact")
-	cmd.Stdin = bytes.NewBufferString(text)
+	cmd := exec.CommandContext(ctx, c.cfg.Bin, c.subArgs("redact")...)
+	cmd.Stdin = strings.NewReader(text)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("alice redact: %w: %s", err, errb.String())
+		return "", fmt.Errorf("alice redact: %w (stderr: %s)", err, strings.TrimSpace(errb.String()))
 	}
 	return out.String(), nil
 }
 
-// Status returns the identity/health self-check.
-func (c *Client) Status(ctx context.Context) (StatusInfo, error) {
-	out, err := c.run(ctx, "status", "--json")
+// Exec runs an allowlisted command with secrets injected into the child's env.
+// env entries are "KEY=VALUE" where VALUE may contain <agent-vault:key>
+// placeholders (alice resolves them via Bob). alice enforces the allowlist
+// (default-deny) and the scope=mcp tag, then syscall.Exec's into the child —
+// so this subprocess captures the child's stdout/stderr. Both streams are then
+// run through `alice redact` before returning, so a secret echoed by the child
+// never reaches the caller in plaintext.
+//
+// On an allowlist denial (or any alice pre-exec failure) the child never runs;
+// alice exits non-zero with the reason on stderr, which surfaces here as a
+// non-zero ExitCode plus the (redacted) message in StderrRedacted.
+func (c *Client) Exec(ctx context.Context, command string, args, env []string) (ExecResult, error) {
+	call := []string{"exec", "--dir", c.cfg.Dir}
+	if c.cfg.Surface != "" {
+		call = append(call, "--surface", c.cfg.Surface)
+	}
+	for _, e := range env {
+		call = append(call, "--env", e) // "KEY=VALUE", VALUE may be a placeholder
+	}
+	call = append(call, "--", command)
+	call = append(call, args...)
+
+	cmd := exec.CommandContext(ctx, c.cfg.Bin, call...)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+
+	exitCode := 0
+	if runErr := cmd.Run(); runErr != nil {
+		var ee *exec.ExitError
+		if errors.As(runErr, &ee) {
+			exitCode = ee.ExitCode()
+		} else {
+			// Could not even start alice (binary missing, etc.).
+			return ExecResult{}, fmt.Errorf("alice exec: %w (stderr: %s)", runErr, strings.TrimSpace(errb.String()))
+		}
+	}
+
+	stdoutR, err := c.Redact(ctx, out.String())
 	if err != nil {
-		return StatusInfo{}, err
+		return ExecResult{}, fmt.Errorf("redact stdout: %w", err)
 	}
-	var s StatusInfo
-	if err := json.Unmarshal(out, &s); err != nil {
-		return StatusInfo{}, fmt.Errorf("parse status output: %w", err)
+	stderrR, err := c.Redact(ctx, errb.String())
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("redact stderr: %w", err)
 	}
-	return s, nil
+	return ExecResult{ExitCode: exitCode, StdoutRedacted: stdoutR, StderrRedacted: stderrR}, nil
 }
