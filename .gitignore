@@ -1,0 +1,10 @@
+# build output
+/anb-mcp
+*.exe
+
+# go
+/vendor/
+
+# editor / OS
+.DS_Store
+*.swp
