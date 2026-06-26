@@ -16,6 +16,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/kaka-milan-22/AnB_MCP/internal/alice"
 	"github.com/kaka-milan-22/AnB_MCP/internal/tools"
@@ -37,7 +38,14 @@ func main() {
 		Surface: "mcp", // alice applies only exec rules tagged scope=mcp (decision #2)
 	})
 
-	t := &tools.Tools{Alice: ac}
+	// anb_render_to_file writes are confined to this base dir (agent-supplied
+	// paths are relative to it; absolute/traversal paths are rejected).
+	renderDir := os.Getenv("ANB_MCP_RENDER_DIR")
+	if renderDir == "" {
+		renderDir = filepath.Join(dir, "renders")
+	}
+
+	t := &tools.Tools{Alice: ac, RenderDir: renderDir}
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "anb-mcp",
@@ -58,6 +66,16 @@ func main() {
 		Name:        "anb_status",
 		Description: "Health and authorization self-check: Bob reachability, this identity, the key prefixes it is authorized for, and the exec-rule count. Returns no secret values.",
 	}, t.Status)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "anb_redact",
+		Description: "Scrub text: replace known secret values and high-entropy tokens with <agent-vault:key> placeholders. Use before logging or returning anything that may contain a secret.",
+	}, t.Redact)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "anb_render_to_file",
+		Description: "Render a template containing <agent-vault:key> placeholders and write the resolved file (mode 0600) to a path under the render dir. Returns the path, never the resolved content — the caller never sees the secret values.",
+	}, t.Render)
 
 	// IMPORTANT: never register a tool that returns plaintext (no anb_get /
 	// anb_reveal / anb_decrypt / shell). The invariant test guards this.

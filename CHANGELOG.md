@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.2.0 — render + redact tools
+
+Two more tools, keeping the use-don't-reveal contract.
+
+- `anb_redact` — scrub text through AnB's redaction engine (`alice redact`):
+  known secret values and high-entropy tokens become `<agent-vault:key>`
+  placeholders. For logging/returning anything that may contain a secret.
+- `anb_render_to_file` — resolve `<agent-vault:key>` placeholders in a template
+  and write the rendered file (mode 0600) **under a confined render dir**.
+  Returns the path, **never the resolved content** — the caller never sees the
+  secret. The agent's template (placeholders only) is written to a temp file;
+  the plaintext lands only in the destination.
+- **Path guard** (`safeOutPath`): the agent-supplied `out_path` is relative to
+  the render dir (`ANB_MCP_RENDER_DIR`, default `<dir>/renders`); absolute paths
+  and `..` traversal are rejected, so an injected agent cannot write outside the
+  render dir or clobber arbitrary files.
+- Tool surface is now five: list / exec / status / redact / render_to_file.
+
+### Verified
+- `safeOutPath` unit test (absolute / traversal rejected; normalized-but-inside
+  allowed); invariant tool-surface test updated to the five-tool set.
+- End-to-end against a live Bob: redact round-trips; render writes a 0600 file
+  with the resolved secret (path returned, content never); an escaping `out_path`
+  is rejected with `isError`.
+
 ## v0.1.0 — first working end-to-end
 
 The first functional release of **AnB-MCP**: an MCP server front-end for

@@ -21,7 +21,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -121,6 +123,34 @@ func (c *Client) Redact(ctx context.Context, text string) (string, error) {
 		return "", fmt.Errorf("alice redact: %w (stderr: %s)", err, strings.TrimSpace(errb.String()))
 	}
 	return out.String(), nil
+}
+
+// RenderToFile resolves <agent-vault:key> placeholders in templateContent and
+// writes the result to outAbsPath (mode 0600 via `alice template`). The agent's
+// template carries only placeholders, so the temp source file holds no secrets;
+// the resolved plaintext lands only in the destination file, never returned to
+// the caller. Keys it references must be authorized for this identity.
+func (c *Client) RenderToFile(ctx context.Context, templateContent, outAbsPath string) error {
+	tmp, err := os.CreateTemp("", "anb-tpl-*")
+	if err != nil {
+		return fmt.Errorf("temp template: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.WriteString(templateContent); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp template: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(outAbsPath), 0o700); err != nil {
+		return fmt.Errorf("mkdir render dir: %w", err)
+	}
+	if _, err := c.output(ctx, c.subArgs("template", tmpName, outAbsPath)...); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Exec runs an allowlisted command with secrets injected into the child's env.

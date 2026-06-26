@@ -29,6 +29,8 @@ for that identity.
 | `anb_list` | List secret keys this identity may reference | names + metadata, **no values** |
 | `anb_exec` | Run an operator-allowlisted command with secrets injected into the child's env | exit code + **redacted** stdout/stderr |
 | `anb_status` | Health / authz self-check | Bob reachability, identity, authorized prefixes, rule count |
+| `anb_redact` | Scrub text — secret values + high-entropy tokens → `<agent-vault:key>` | redacted text |
+| `anb_render_to_file` | Render a placeholder template, write a 0600 file under the render dir | the path, **never the content** |
 
 Never exposed: any reveal / get-plaintext / shell tool.
 

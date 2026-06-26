@@ -57,7 +57,7 @@ func TestToolSurfaceUseDontReveal(t *testing.T) {
 	for _, tl := range res.Tools {
 		got[tl.Name] = true
 	}
-	want := []string{"anb_list", "anb_exec", "anb_status"}
+	want := []string{"anb_list", "anb_exec", "anb_status", "anb_redact", "anb_render_to_file"}
 	if len(got) != len(want) {
 		t.Fatalf("tool set = %v, want exactly %v", keys(got), want)
 	}

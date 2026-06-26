@@ -2,13 +2,16 @@
 // thin adapter over the alice client. Input/output structs carry json +
 // jsonschema tags; the go-sdk infers the tool schema from them.
 //
-// Invariant: NO handler here returns a plaintext secret. Tools either return
-// metadata (list/status) or route secrets into a child process (exec),
-// returning only redacted output.
+// Invariant: NO handler returns a plaintext secret. Tools return metadata
+// (list/status), route secrets into a child process (exec) or a file
+// (render_to_file) and return only redacted/no content, or scrub text (redact).
 package tools
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/kaka-milan-22/AnB_MCP/internal/alice"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -16,7 +19,26 @@ import (
 
 // Tools holds the dependencies shared by all handlers.
 type Tools struct {
-	Alice *alice.Client
+	Alice     *alice.Client
+	RenderDir string // base dir that anb_render_to_file writes are confined to
+}
+
+// safeOutPath confines an agent-supplied relative path to base. It rejects
+// absolute paths and any traversal that escapes base — an agent (even prompt-
+// injected) cannot write outside the render dir or clobber arbitrary files.
+func safeOutPath(base, rel string) (string, error) {
+	if rel == "" {
+		return "", fmt.Errorf("out_path is empty")
+	}
+	if filepath.IsAbs(rel) {
+		return "", fmt.Errorf("out_path %q must be relative to the render dir", rel)
+	}
+	baseClean := filepath.Clean(base)
+	clean := filepath.Clean(filepath.Join(baseClean, rel))
+	if clean != baseClean && !strings.HasPrefix(clean, baseClean+string(filepath.Separator)) {
+		return "", fmt.Errorf("out_path %q escapes the render dir", rel)
+	}
+	return clean, nil
 }
 
 // ---- anb_list -------------------------------------------------------------
@@ -59,6 +81,47 @@ func (t *Tools) Exec(ctx context.Context, _ *mcp.CallToolRequest, in ExecInput) 
 		StdoutRedacted: r.StdoutRedacted,
 		StderrRedacted: r.StderrRedacted,
 	}, nil
+}
+
+// ---- anb_redact -----------------------------------------------------------
+
+type RedactInput struct {
+	Text string `json:"text" jsonschema:"text to scrub; known secret values and high-entropy tokens become <agent-vault:key> placeholders"`
+}
+
+type RedactOutput struct {
+	Redacted string `json:"redacted" jsonschema:"the input with secrets replaced by placeholders"`
+}
+
+func (t *Tools) Redact(ctx context.Context, _ *mcp.CallToolRequest, in RedactInput) (*mcp.CallToolResult, RedactOutput, error) {
+	r, err := t.Alice.Redact(ctx, in.Text)
+	if err != nil {
+		return nil, RedactOutput{}, err
+	}
+	return nil, RedactOutput{Redacted: r}, nil
+}
+
+// ---- anb_render_to_file ---------------------------------------------------
+
+type RenderInput struct {
+	Template string `json:"template" jsonschema:"file content with <agent-vault:key> placeholders; resolved values are written to disk (mode 0600), never returned to the caller"`
+	OutPath  string `json:"out_path" jsonschema:"destination path RELATIVE to the render dir; absolute paths and path traversal are rejected"`
+}
+
+type RenderOutput struct {
+	Written bool   `json:"written"`
+	Path    string `json:"path" jsonschema:"the absolute path the rendered file was written to"`
+}
+
+func (t *Tools) Render(ctx context.Context, _ *mcp.CallToolRequest, in RenderInput) (*mcp.CallToolResult, RenderOutput, error) {
+	abs, err := safeOutPath(t.RenderDir, in.OutPath)
+	if err != nil {
+		return nil, RenderOutput{}, err
+	}
+	if err := t.Alice.RenderToFile(ctx, in.Template, abs); err != nil {
+		return nil, RenderOutput{}, err
+	}
+	return nil, RenderOutput{Written: true, Path: abs}, nil
 }
 
 // ---- anb_status -----------------------------------------------------------
