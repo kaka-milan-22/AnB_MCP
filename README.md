@@ -77,15 +77,17 @@ Tools surface as `mcp__anb__anb_list`, `mcp__anb__anb_exec`, `mcp__anb__anb_stat
 
 ## Status
 
-**v0.1 — wired to the real alice CLI.** The MCP server, tool schemas, and the alice
-subprocess wrapper are implemented against alice's actual interface (`--dir`,
-`exec --surface mcp` + subprocess capture, `redact` stdin filter, `list/status
---json`). Builds clean. Remaining for v0.1: enroll a dedicated scoped MCP identity,
-add `mcp`-scoped exec rules, end-to-end test against a running Bob, and complete the
-invariant tests in `test/`.
+**v0.1 — done, verified end-to-end (and by a real agent).** All three tools work
+against a live Bob: `anb_status` returns real KMS state; `anb_exec` runs allowlisted
+commands and denies the rest; and a secret injected via `--env <agent-vault:key>` is
+used by the child process while the caller receives only the redacted placeholder —
+the plaintext never reaches the agent. Confirmed both by go-sdk-client invariant
+tests (`test/`) and by an independent Claude Code session calling the tools over MCP.
+See [CHANGELOG.md](./CHANGELOG.md).
 
-Roadmap: see [PLAN.md](./PLAN.md). (v0.2 adds `anb_render_to_file` + `anb_redact`;
-v0.3 refactors to a direct, per-agent scoped Bob client.)
+Roadmap: see [PLAN.md](./PLAN.md). (v0.2 adds `anb_render_to_file` + a dedicated
+`anb_redact` tool; v0.3 refactors to a direct, per-agent scoped Bob client for
+ephemeral scoped credentials.)
 
 ## License
 
