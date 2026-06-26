@@ -40,7 +40,7 @@ func (t *Tools) List(ctx context.Context, _ *mcp.CallToolRequest, _ ListInput) (
 type ExecInput struct {
 	Command string   `json:"command" jsonschema:"absolute path of the command to run; must match an allowlisted rule scoped to mcp"`
 	Args    []string `json:"args,omitempty" jsonschema:"command arguments"`
-	Env     []string `json:"env,omitempty" jsonschema:"KEY=VALUE entries for the child env; VALUE may contain <agent-vault:key> placeholders, which are resolved without ever returning the secret"`
+	Env     []string `json:"env,omitempty" jsonschema:"child env entries, each in KEY=VALUE form; the VALUE may contain <agent-vault:key> placeholders that are resolved without ever returning the secret"`
 }
 
 type ExecOutput struct {
