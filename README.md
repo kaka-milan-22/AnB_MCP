@@ -3,6 +3,8 @@
 An MCP server front-end for [AnB](https://github.com/kaka-milan-22/AnB) that lets AI
 agents **use** secrets without ever **seeing** them.
 
+![anb-mcp quickstart](docs/quickstart.gif)
+
 > **Headline guarantee:** even a fully prompt-injected agent, calling every tool in
 > every way, cannot extract a raw key. No tool returns a plaintext secret; reveal
 > paths require a TTY that this server does not have, so `alice` refuses them.
