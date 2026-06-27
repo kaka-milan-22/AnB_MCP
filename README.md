@@ -88,8 +88,9 @@ tests (`test/`) and by an independent Claude Code session calling the tools over
 See [CHANGELOG.md](./CHANGELOG.md).
 
 Roadmap: see [PLAN.md](./PLAN.md). (v0.2 adds `anb_render_to_file` + a dedicated
-`anb_redact` tool; v0.3 refactors to a direct, per-agent scoped Bob client for
-ephemeral scoped credentials.)
+`anb_redact` tool; v0.3 lowers per-call latency and adds per-agent ephemeral,
+short-TTL scoped credentials — **while keeping `alice` as a separate process**, so the
+no-reveal guarantee stays *structural*, not a code-discipline promise.)
 
 ## License
 

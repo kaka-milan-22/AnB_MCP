@@ -59,9 +59,10 @@ Bob is already the service; MCP is the agent-facing interface.**
 
 ## Tech decisions
 
-- **Language: Go.** Matches AnB (one ecosystem). Lets us later `import` alice's Go
-  packages directly when the server graduates from subprocess to a direct, per-agent
-  scoped Bob client (see Milestone v0.3).
+- **Language: Go.** Matches AnB (one ecosystem) — shared types, one toolchain, easy
+  coordination. Note we deliberately do **not** plan to `import` alice's client packages
+  in-process (see Milestone v0.3 for why): keeping `alice` as a separate process is what
+  makes the no-reveal guarantee *structural* rather than a code-discipline promise.
 - **MCP SDK:** official `github.com/modelcontextprotocol/go-sdk` (verify it's the most
   active option at build time; `github.com/mark3labs/mcp-go` is the mature fallback).
 - **v0.1 strategy: shell out to the `alice` binary.** Fastest, AND safest — reuses
@@ -139,9 +140,36 @@ AnB_MCP/
   to `alice`. Get the exec allowlist argv/destination pinning right. Ship + `claude mcp add`.
 - **v0.2 — round it out:** `anb_render_to_file` + `anb_redact`. Invariant test suite.
   Write the README threat model. One blog post / community share.
-- **v0.3 — direct client (ties to AnB "Move 2/3"):** refactor to import alice-core as a
-  Go library; MCP server becomes a per-agent **scoped Alice identity** talking to Bob
-  directly (no subprocess), enabling per-agent ephemeral/scoped credentials.
+- **v0.3 — lower latency + per-agent ephemeral credentials, WITHOUT weakening the
+  threat model.**
+
+  *Rejected approach (was the original v0.3): import alice's client packages and talk to
+  Bob in-process, no subprocess.* We deliberately drop this. Today the no-reveal property
+  is **structural**: plaintext never enters anb-mcp's address space — `alice` runs as a
+  separate process and `syscall.Exec`s the secret straight into the child's env (or writes
+  it to a file), so anb-mcp literally cannot leak what it never holds. An in-process direct
+  client would have to `Decrypt` plaintext into anb-mcp's own memory for `exec`/`render`,
+  downgrading no-reveal from "physically impossible" to "we promise not to return it"
+  (a code-discipline + invariant-test contract). That trades the project's hardest
+  security property for IPC savings. Not worth it.
+
+  Instead, get the two real wins of the original v0.3 while **keeping the subprocess
+  isolation** — they're orthogonal to who holds the client:
+
+  1. **Latency** — collapse the per-call fork+exec overhead. `anb_exec` currently spawns
+     `alice` three times (exec + redact stdout + redact stderr). Either fold redaction
+     into the single `alice exec` invocation, or add a long-lived `alice` daemon/socket
+     mode that anb-mcp talks to over a local pipe. Plaintext still only ever lives in the
+     `alice` process; anb-mcp never touches it.
+  2. **Per-agent ephemeral/scoped credentials** — have Bob mint a **session-scoped,
+     short-TTL identity** (bounded to a key-prefix) that `alice` uses for that agent
+     session, torn down at session end. This needs a new Bob RPC to issue scoped
+     identities (the current proto is encrypt/decrypt/decryptMany/status only) — gate it
+     behind its own threat model. The benefit comes from the short-lived identity, NOT
+     from who is the client, so anb-mcp keeps shelling out to `alice`.
+
+  Net: same structural no-reveal guarantee as v0.1/v0.2, plus lower latency and tighter,
+  time-boxed per-agent blast radius.
 
 ---
 
