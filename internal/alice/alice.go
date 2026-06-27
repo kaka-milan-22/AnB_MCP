@@ -27,6 +27,25 @@ import (
 	"strings"
 )
 
+// redactStreamSplit separates stdout from stderr when Exec redacts both streams
+// in a single `alice redact` pass (instead of one spawn per stream). The NUL
+// bytes make it implausible in real command output and break any high-entropy
+// run that could otherwise straddle the boundary, so the redactor leaves the
+// literal intact and we can split on it afterward.
+const redactStreamSplit = "\x00--anb-stream-split--\x00"
+
+// splitRedacted recovers (stdout, stderr) from a redacted combined buffer. ok
+// is false if the sentinel did not survive redaction — the caller must then
+// fall back to redacting each stream on its own rather than mis-attributing
+// bytes across streams.
+func splitRedacted(combined string) (stdout, stderr string, ok bool) {
+	before, after, found := strings.Cut(combined, redactStreamSplit)
+	if !found {
+		return "", "", false
+	}
+	return before, after, true
+}
+
 // Config configures how we invoke the alice binary.
 type Config struct {
 	Bin     string // path/name of the alice binary (default "alice")
@@ -190,13 +209,22 @@ func (c *Client) Exec(ctx context.Context, command string, args, env []string) (
 		}
 	}
 
-	stdoutR, err := c.Redact(ctx, out.String())
+	// Redact both streams in a SINGLE `alice redact` pass (was one spawn each):
+	// concatenate with a sentinel, redact once, split back. If the sentinel did
+	// not survive redaction, fall back to per-stream redaction — correctness
+	// over the spawn saving, never mis-attribute bytes across streams.
+	combined, err := c.Redact(ctx, out.String()+redactStreamSplit+errb.String())
 	if err != nil {
-		return ExecResult{}, fmt.Errorf("redact stdout: %w", err)
+		return ExecResult{}, fmt.Errorf("redact output: %w", err)
 	}
-	stderrR, err := c.Redact(ctx, errb.String())
-	if err != nil {
-		return ExecResult{}, fmt.Errorf("redact stderr: %w", err)
+	stdoutR, stderrR, ok := splitRedacted(combined)
+	if !ok {
+		if stdoutR, err = c.Redact(ctx, out.String()); err != nil {
+			return ExecResult{}, fmt.Errorf("redact stdout: %w", err)
+		}
+		if stderrR, err = c.Redact(ctx, errb.String()); err != nil {
+			return ExecResult{}, fmt.Errorf("redact stderr: %w", err)
+		}
 	}
 	return ExecResult{ExitCode: exitCode, StdoutRedacted: stdoutR, StderrRedacted: stderrR}, nil
 }
