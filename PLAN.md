@@ -161,15 +161,68 @@ AnB_MCP/
      into the single `alice exec` invocation, or add a long-lived `alice` daemon/socket
      mode that anb-mcp talks to over a local pipe. Plaintext still only ever lives in the
      `alice` process; anb-mcp never touches it.
-  2. **Per-agent ephemeral/scoped credentials** — have Bob mint a **session-scoped,
-     short-TTL identity** (bounded to a key-prefix) that `alice` uses for that agent
-     session, torn down at session end. This needs a new Bob RPC to issue scoped
-     identities (the current proto is encrypt/decrypt/decryptMany/status only) — gate it
-     behind its own threat model. The benefit comes from the short-lived identity, NOT
-     from who is the client, so anb-mcp keeps shelling out to `alice`.
+  2. **Per-agent ephemeral/scoped credentials.** *(Direction kept, not scheduled — see
+     status below.)*
+
+     Today the MCP identity is **not a "permanent" cert, but a long-TTL, manually-issued,
+     static one**: an operator runs `bob sign-csr --days N` (gated by an out-of-band
+     pairing code), so the cert's `NotAfter = now + N days`, the identity is fixed, and
+     every agent session shares that one `alice-mcp` identity. Its key-prefix scope is
+     *not* in the cert — it lives in `authz.json` as `Rules[identity] -> prefixes`
+     (`internal/authz`), resolved by Bob per-identity at call time.
+
+     The goal is to make that credential **ephemeral**, which is three things together,
+     not just a shorter TTL: (a) TTL from days down to minutes/hours; (b) **per-session**
+     issuance — one short-lived cert per agent session, torn down at session end; (c)
+     bound to a **prefix scope**.
+
+     Key point: **the CA can already mint short-TTL certs** — `SignCSR(csr, ttl)` /
+     `IssueClient(identity, ttl)` (`internal/ca`) take an arbitrary `ttl`, so passing
+     `10*time.Minute` already yields a 10-minute cert. No new signing primitive is needed.
+     What's missing is an **automated, online, controlled issuance path**: today
+     `SignCSR` is gated by a human operator + OOB pairing code, so an agent session can't
+     self-serve a short cert. The real work — and the real threat-modeling — is a Bob RPC
+     that wraps the existing `SignCSR(ttl)` behind an authz gate. The signing is off the
+     shelf; **the gate is the product.**
+
+     The gate is NOT a single "who can sign" rule — it's three dimensions, anchored by one
+     invariant:
+
+     - **(a) Caller authn — who may request.** Which identity is allowed to call the
+       issuance RPC at all (e.g. only a holder of an `mcp-bootstrap` identity).
+     - **(b) Scope ceiling — what may be signed.** The issued cert must not exceed the
+       *requester's own* authority: prefix must be a **subset** of the caller's own
+       prefixes (never sign access to a key the caller itself lacks); TTL must be under a
+       hard **ceiling** (e.g. <= 1h, so "ephemeral" can't be requested into "long-lived");
+       the derived identity's CN is constrained (no minting a cert that impersonates a
+       *different* identity).
+     - **(c) Anti-amplification.** Rate/count limits on issuance, and Bob **audits** every
+       mint (who, for whom, what scope, what TTL).
+
+     **The load-bearing invariant: no privilege escalation — a derived cert's authority
+     MUST be a subset of the signer's.** This online RPC replaces the human gate (operator
+     + OOB pairing) with an unattended path, making it a high-value attack target: assume a
+     prompt-injected agent can drive `mcp-bootstrap` to call it. The gate's whole job is to
+     guarantee that even when abused it can only mint a cert that is **<= the caller's own
+     authority and short-lived** — so the attacker gains nothing it didn't already have;
+     issuance degrades to "open a shorter-lived ticket within powers you already hold."
+     Everything else in the gate orbits this invariant.
+
+     Triggering stays a **command, not a direct API call from anb-mcp**: anb-mcp shells
+     out to an `alice enroll-ephemeral --prefix X --ttl 10m`-style subcommand; `alice`
+     (the sole mTLS client to Bob) calls the new RPC, lands the short cert in a temp dir,
+     and anb-mcp uses it for the session — anb-mcp never holds an mTLS session to Bob.
+     This keeps the single `anb-mcp -> alice -> Bob` boundary intact. (Issuance touches no
+     secret *plaintext* — Bob returns a cert+key, not a vault value — so even a direct
+     call wouldn't break no-reveal; we still route via `alice` to preserve one client
+     boundary and avoid putting an mTLS stack + bootstrap identity inside anb-mcp.)
 
   Net: same structural no-reveal guarantee as v0.1/v0.2, plus lower latency and tighter,
   time-boxed per-agent blast radius.
+
+  **Status:** parked. The latency win (item 1) is the near-term piece; the ephemeral-cert
+  direction (item 2) is recorded as a good, high-demand idea but is *not scheduled* — no
+  code changes planned for it yet. Revisit when there's a concrete need.
 
 ---
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.1 — richer tool descriptions (Glama TDQS)
+
+No behavior change; improves the Tool Definition Quality Score by enriching
+what each tool tells an agent.
+
+- **Behavior**: every tool description now states its side effects (e.g.
+  `anb_exec` spawns a subprocess and is not idempotent; `anb_render_to_file`
+  writes/overwrites a file), preconditions (enrolled identity + reachable,
+  unlocked Bob), idempotency, error behavior, and the no-reveal guarantee.
+- **Parameters**: tightened the `command` / `args` / `env` / `out_path`
+  jsonschema descriptions with constraints and examples.
+- Server self-reported `Version` bumped to 0.2.1.
+
 ## v0.2.0 — render + redact tools
 
 Two more tools, keeping the use-don't-reveal contract.

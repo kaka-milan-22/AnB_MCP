@@ -49,32 +49,32 @@ func main() {
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "anb-mcp",
-		Version: "0.1.0",
+		Version: "0.2.1",
 	}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "anb_list",
-		Description: "List the secret keys this identity may reference. Returns key names and metadata only — never values.",
+		Description: "List the secret key names and metadata this identity may reference — never the values. Read-only and idempotent, no side effects. Requires an enrolled identity and a reachable, unlocked Bob KMS daemon; errors if Bob is unreachable/locked or the identity is unauthorized. Use this to discover which <agent-vault:key> names exist before referencing them in anb_exec or anb_render_to_file.",
 	}, t.List)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "anb_exec",
-		Description: "Run an operator-allowlisted command with named secrets injected into the child process's environment. Returns the exit code and redacted stdout/stderr. The raw secret is never returned to the caller.",
+		Description: "Run an operator-allowlisted command with named secrets injected into the child process's environment. SIDE EFFECT: spawns a real subprocess — default-deny, only commands matching a scope=mcp allowlist rule run, everything else is refused. NOT idempotent (effects depend on the command). Requires an enrolled identity and a reachable, unlocked Bob to resolve <agent-vault:key> placeholders. Returns the exit code plus REDACTED stdout/stderr; the raw secret is never returned even if the child prints it. A denied or failed command returns a non-zero exit_code with the reason in stderr_redacted.",
 	}, t.Exec)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "anb_status",
-		Description: "Health and authorization self-check: Bob reachability, this identity, the key prefixes it is authorized for, and the exec-rule count. Returns no secret values.",
+		Description: "Read-only self-check: reports enrollment, client-cert presence, Bob reachability and unlock state, identity, server name, and idle-TTL. No side effects, idempotent, returns NO secret values. Call this first to confirm the vault is ready before anb_list/anb_exec/anb_render_to_file; on failure the error field explains why (e.g. Bob unreachable or locked).",
 	}, t.Status)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "anb_redact",
-		Description: "Scrub text: replace known secret values and high-entropy tokens with <agent-vault:key> placeholders. Use before logging or returning anything that may contain a secret.",
+		Description: "Scrub text: replace known secret values and high-entropy tokens with <agent-vault:key> placeholders. Read-only, idempotent, no side effects, and needs no Bob connection. Fail-safe by design — may over-redact, never under-redact. Use before logging or returning any text that might contain a secret.",
 	}, t.Redact)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "anb_render_to_file",
-		Description: "Render a template containing <agent-vault:key> placeholders and write the resolved file (mode 0600) to a path under the render dir. Returns the path, never the resolved content — the caller never sees the secret values.",
+		Description: "Render a template containing <agent-vault:key> placeholders and write the resolved file (mode 0600) under the confined render dir. SIDE EFFECT: writes a file to disk (overwrites if the path exists). Requires an enrolled identity and a reachable, unlocked Bob to resolve placeholders. Returns the written path, NEVER the resolved content — the caller never sees the secret values. out_path is relative to the render dir; absolute paths and .. traversal are rejected.",
 	}, t.Render)
 
 	// IMPORTANT: never register a tool that returns plaintext (no anb_get /

@@ -60,9 +60,9 @@ func (t *Tools) List(ctx context.Context, _ *mcp.CallToolRequest, _ ListInput) (
 // ---- anb_exec -------------------------------------------------------------
 
 type ExecInput struct {
-	Command string   `json:"command" jsonschema:"absolute path of the command to run; must match an allowlisted rule scoped to mcp"`
-	Args    []string `json:"args,omitempty" jsonschema:"command arguments"`
-	Env     []string `json:"env,omitempty" jsonschema:"child env entries, each in KEY=VALUE form; the VALUE may contain <agent-vault:key> placeholders that are resolved without ever returning the secret"`
+	Command string   `json:"command" jsonschema:"absolute path of the executable to run (e.g. /usr/bin/curl); the full command line must match a scope=mcp allowlist rule or it is refused"`
+	Args    []string `json:"args,omitempty" jsonschema:"positional arguments passed to the command in order, each literally (no shell parsing/globbing); omit for none"`
+	Env     []string `json:"env,omitempty" jsonschema:"child env entries, each in KEY=VALUE form; VALUE may contain <agent-vault:key> placeholders that Bob resolves into the child env only — never echoed back. Omit for none"`
 }
 
 type ExecOutput struct {
@@ -105,7 +105,7 @@ func (t *Tools) Redact(ctx context.Context, _ *mcp.CallToolRequest, in RedactInp
 
 type RenderInput struct {
 	Template string `json:"template" jsonschema:"file content with <agent-vault:key> placeholders; resolved values are written to disk (mode 0600), never returned to the caller"`
-	OutPath  string `json:"out_path" jsonschema:"destination path RELATIVE to the render dir; absolute paths and path traversal are rejected"`
+	OutPath  string `json:"out_path" jsonschema:"destination path RELATIVE to the render dir (e.g. \"app/.env\" or \"config/db.conf\"); absolute paths and .. traversal are rejected. Parent dirs are created as needed"`
 }
 
 type RenderOutput struct {
